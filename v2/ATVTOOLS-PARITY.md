@@ -25,7 +25,7 @@ aTV Tools is a **phone/tablet companion app** (Android 8.1+/iOS 14+) controlling
 | **Send text to TV (type from keyboard)** | ✅ | ✅ |
 | Permissions grant/revoke | ✅ | ✅ |
 | Bulk cache clear | ✅ | ✅ |
-| Running apps + force-stop | ✅ | ✅ |
+| Running apps + force-stop | ✅ | ✅ (Task Manager: per-app state, gated `am kill`, bulk stop, force stop) |
 | Resource monitor | CPU/RAM/net/storage | ✅ CPU/RAM/net/temp/storage/display |
 | Shell runner with bookmarks | ✅ | ✅ |
 | Screen mirroring / gamepad / media remote | ✅ (phone-centric) | — (out of scope for desktop) |

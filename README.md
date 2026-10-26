@@ -74,6 +74,7 @@ The first time the app connects, the TV asks **"Allow debugging?"**. Accept it.
 |-----|--------------|
 | **Overview** | Model, Android version, build and hardware ID. |
 | **Health** | Temperature, CPU and network sampling, RAM and storage, display mode and HDR, audio, and the apps using the most memory, each with a safety verdict. |
+| **Task Manager** | Every running app with its memory and what Android is doing with it (on screen, playing, running a service, cached). Stop background apps one at a time or all at once, and mark the ones Stop all should leave running. Stopping only ends background processes; nothing is disabled. |
 | **Playback** | What the TV is actually outputting: resolution, refresh rate, HDR and audio passthrough. |
 | **Launcher** | Install a supported launcher, make it the default, and, where the firmware allows it, disable the stock launcher after you confirm. |
 | **App List** | Disable, enable or uninstall any app, or install one from the Play Store. |
@@ -108,6 +109,9 @@ own, it shows up when the device list refreshes.
 - A curated **do-not-disable list** blocks disables that would break the device, in every curated
   action: Optimize, App List, the Launcher wizard and Snapshot apply.
 - **Recovery** asks the TV to re-enable every disabled package and reports any it refused.
+- The **Task Manager** only stops apps that are running in the background, and never protected or
+  system apps, the Home app, the keyboard or accessibility services. It checks the TV again before
+  every stop and reports what actually happened, including apps that started again on their own.
 - The **Shell** tab is the exception: it runs whatever you type. Its warnings are there for a
   reason. A bad command can erase data or leave the device unusable.
 

@@ -303,11 +303,6 @@ pub fn package_for_process(process: &str) -> Option<&str> {
 /// Per v1's Get-AppMemoryMap learnings: per-process query (`dumpsys meminfo <pkg>`)
 /// is unreliable across Android versions; the system-wide section is robust.
 pub fn parse_pss_by_process(meminfo: &str) -> Vec<ProcessMemory> {
-    // `   85,413K: com.google.android.katniss:interactor (pid 15826 state 5 oom 150)`
-    static ROW: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*([\d,]+)K:\s+(\S.*?)(?:\s+\(pid\s+(\d+)[^)]*\))?\s*$").unwrap()
-    });
-
     let mut rows = Vec::new();
     let mut in_section = false;
     for line in meminfo.lines() {
@@ -321,19 +316,91 @@ pub fn parse_pss_by_process(meminfo: &str) -> Vec<ProcessMemory> {
         if line.trim().is_empty() {
             break;
         }
-        let Some(caps) = ROW.captures(line) else {
-            continue;
-        };
-        let Ok(kb) = caps[1].replace(',', "").parse::<u64>() else {
-            continue;
-        };
-        rows.push(ProcessMemory {
-            process: caps[2].to_string(),
-            pid: caps.get(3).and_then(|m| m.as_str().parse().ok()),
-            kb,
-        });
+        if let Some(row) = parse_memory_row(line) {
+            rows.push(row);
+        }
     }
     rows
+}
+
+/// One `<kb>K: <name> [(pid N …)]` line of a `dumpsys meminfo` total section.
+fn parse_memory_row(line: &str) -> Option<ProcessMemory> {
+    // `   85,413K: com.google.android.katniss:interactor (pid 15826 state 5 oom 150)`
+    static ROW: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*([\d,]+)K:\s+(\S.*?)(?:\s+\(pid\s+(\d+)[^)]*\))?\s*$").unwrap()
+    });
+    let caps = ROW.captures(line)?;
+    let kb = caps[1].replace(',', "").parse::<u64>().ok()?;
+    Some(ProcessMemory {
+        process: caps[2].to_string(),
+        pid: caps.get(3).and_then(|m| m.as_str().parse().ok()),
+        kb,
+    })
+}
+
+/// Which memory figure a meminfo reading carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryMetric {
+    Pss,
+    Rss,
+}
+
+/// One process row of the `Total … by OOM adjustment:` section, with the
+/// importance bucket Android filed it under (`Cached`, `Visible`, …).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OomProcess {
+    /// The bucket heading exactly as the device printed it.
+    pub bucket: String,
+    pub process: String,
+    pub pid: Option<u32>,
+    pub kb: u64,
+}
+
+/// Every process in the `Total PSS by OOM adjustment:` section of
+/// `dumpsys meminfo`, each tagged with the bucket it was listed under.
+///
+/// The bucket is Android's own answer to "how much is this process in use
+/// right now" (Foreground, Visible, Perceptible, … Cached), which is what a
+/// task manager needs and what `Total PSS by process` does not say. Builds
+/// that print only RSS fall back to `Total RSS by OOM adjustment:`, and the
+/// metric is returned so the UI can say which it is.
+///
+/// Bucket headings carry no `(pid …)`; process rows always do, which is how
+/// the two are told apart without relying on indentation (it varies with the
+/// width of the largest number). `None` when neither section is present.
+pub fn parse_oom_adjustment(meminfo: &str) -> Option<(MemoryMetric, Vec<OomProcess>)> {
+    let section = |heading: &str| -> Option<Vec<OomProcess>> {
+        let mut lines = meminfo.lines().skip_while(|l| !l.contains(heading));
+        lines.next()?;
+        let mut bucket: Option<String> = None;
+        let mut out = Vec::new();
+        for line in lines {
+            if line.trim().is_empty() {
+                break;
+            }
+            let Some(row) = parse_memory_row(line) else {
+                continue;
+            };
+            match row.pid {
+                None => bucket = Some(row.process),
+                Some(_) => {
+                    if let Some(bucket) = &bucket {
+                        out.push(OomProcess {
+                            bucket: bucket.clone(),
+                            process: row.process,
+                            pid: row.pid,
+                            kb: row.kb,
+                        });
+                    }
+                }
+            }
+        }
+        Some(out)
+    };
+    section("Total PSS by OOM adjustment:")
+        .map(|rows| (MemoryMetric::Pss, rows))
+        .or_else(|| section("Total RSS by OOM adjustment:").map(|rows| (MemoryMetric::Rss, rows)))
 }
 
 /// Package → MB, from the `Total PSS by process:` section. A package's
@@ -1198,6 +1265,65 @@ mod tests {
         let input = "package:com.foo\nnot-a-package\npackage:com.bar\n";
         let pkgs = parse_installed_packages_output(input);
         assert_eq!(pkgs, vec!["com.foo", "com.bar"]);
+    }
+
+    #[test]
+    fn oom_adjustment_tags_each_process_with_its_bucket() {
+        let shield = include_str!("../../tests/fixtures/devices/shield-tv-pro/dumpsys-meminfo.txt");
+        let (metric, rows) = parse_oom_adjustment(shield).unwrap();
+        assert_eq!(
+            metric,
+            MemoryMetric::Pss,
+            "PSS wins over the RSS section printed first"
+        );
+        let plex = rows
+            .iter()
+            .find(|r| r.process == "com.plexapp.android")
+            .unwrap();
+        assert_eq!(
+            (plex.bucket.as_str(), plex.pid, plex.kb),
+            ("Cached", Some(27976), 256_393)
+        );
+        let projectivy = rows
+            .iter()
+            .find(|r| r.process == "com.spocky.projengmenu")
+            .unwrap();
+        assert_eq!(projectivy.bucket, "Visible Low");
+        assert!(
+            rows.iter()
+                .all(|r| r.process != "Cached" && r.process != "Native"),
+            "bucket headings are never processes"
+        );
+        // Every PSS-by-process row with a pid appears once, under some bucket.
+        let by_process = parse_pss_by_process(shield);
+        assert_eq!(
+            rows.len(),
+            by_process.iter().filter(|p| p.pid.is_some()).count()
+        );
+
+        // Right-aligned headings of varying width and a dump cut short.
+        let pixel = include_str!("../../tests/fixtures/devices/pixel-10-pro/dumpsys-meminfo.txt");
+        let (_, rows) = parse_oom_adjustment(pixel).unwrap();
+        let bucket = |p: &str| {
+            rows.iter()
+                .find(|r| r.process == p)
+                .map(|r| r.bucket.as_str())
+        };
+        assert_eq!(bucket("com.google.SSRestartDetector"), Some("Persistent"));
+        assert_eq!(
+            bucket("com.google.android.GoogleCamera"),
+            Some("B Services")
+        );
+        assert_eq!(bucket("com.google.android.dialer"), Some("Cached"));
+    }
+
+    #[test]
+    fn oom_adjustment_falls_back_to_rss_and_is_none_without_either() {
+        let rss = "Total RSS by OOM adjustment:\n    10,000K: Cached\n        10,000K: com.foo (pid 7)\n\n";
+        let (metric, rows) = parse_oom_adjustment(rss).unwrap();
+        assert_eq!(metric, MemoryMetric::Rss);
+        assert_eq!(rows[0].bucket, "Cached");
+        assert!(parse_oom_adjustment("Total PSS by process:\n  1K: com.foo (pid 1)\n").is_none());
     }
 
     #[test]

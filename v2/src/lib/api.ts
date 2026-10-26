@@ -57,6 +57,9 @@ import type {
   ShellRunResult,
   SnapshotApplyPlan,
   SnapshotFile,
+  StopMode,
+  StopReport,
+  TaskSnapshot,
   TweaksState,
   UpdateInfo,
   WriteResult,
@@ -136,6 +139,9 @@ export const api = {
     invoke<ScreenshotResult>("take_screenshot", { serial }),
   forceStop: (serial: string, pkg: string) =>
     invoke<ActionResult>("force_stop", { serial, package: pkg }),
+  taskSnapshot: (serial: string) => invoke<TaskSnapshot>("task_snapshot", { serial }),
+  stopBackgroundApps: (serial: string, packages: string[], mode: StopMode) =>
+    invoke<StopReport>("stop_background_apps", { serial, packages, mode }),
 
   disablePackage: (serial: string, pkg: string) =>
     invoke<ActionResult>("disable_package", { serial, package: pkg }),

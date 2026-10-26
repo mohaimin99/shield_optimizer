@@ -22,6 +22,25 @@ this file and shows the newest few sections, dated, from its version button.
 
 ## Unreleased
 
+### Added
+
+- **Task Manager tab.** Lists every running app with its memory and what Android is doing with it
+  (on screen, visible, playing or running a foreground service, running a background service,
+  previous app, cached), read from the importance buckets in `dumpsys meminfo`. **Stop** ends an
+  app's background processes with `am kill`; **Stop all** does the same for every stoppable app
+  after you confirm the list, skipping any you marked **Keep running** on this TV. Nothing is
+  disabled, and the app opens normally next time.
+- Stop is offered only for user-installed apps, or preinstalled ones the reviewed catalog rates
+  safe to remove, that have something running in the background. Protected and caution-list
+  packages, other system apps, Home apps, the active keyboard, enabled accessibility services and
+  anything in use are listed with the reason and never offered. The gate lives in the engine, and
+  every stop reads the TV again and re-checks before anything is sent.
+- After a stop the TV is read again and each app's result is reported: stopped (with the memory
+  it freed), started again on its own, kept running by Android, or failed. An app that restarts
+  itself can then be force stopped, which also cancels its scheduled jobs until it is opened;
+  force stop is refused if any part of the app is in use. Auto-refresh is opt-in and stops when
+  you leave the tab or hide the window.
+
 ## v2-2.4.1 — 2026-10-23
 
 Google TV launcher switching works properly now: Setup Wraith, Google TV's setup helper, no longer takes the Home button back after you change launchers (#122, #157, #158). Also new: a Logs tab, Stop ADB when quitting, Report this app, app storage details, restart after updating, patch notes on demand, a proper right-click menu, and Ask again for a TV whose debugging prompt was missed. 2.3.1 was prepared but never published, and the 2.4.0 build failed before anything was

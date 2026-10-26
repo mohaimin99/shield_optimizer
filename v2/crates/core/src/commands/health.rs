@@ -276,6 +276,41 @@ pub async fn report_all(state: State<'_, AppState>) -> Result<Vec<DeviceReport>,
     Ok(out)
 }
 
+/// RAM summary from `dumpsys meminfo`, falling back to `/proc/meminfo` when
+/// the dumpsys summary is missing or unparseable. Shared by Health and the
+/// Task Manager so the two screens cannot disagree about one TV's RAM.
+pub(crate) fn ram_info(mem_text: &str, procmem_text: &str) -> RamInfo {
+    let mut ram = parse_meminfo_summary(mem_text);
+    // Fast, local fallback for RAM info when the dumpsys meminfo section is
+    // missing or unparseable.
+    if ram.total_mb.is_none() || ram.free_mb.is_none() {
+        let mut total: Option<u64> = None;
+        let mut free: Option<u64> = None;
+        let mut avail: Option<u64> = None;
+        for line in procmem_text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if parts[0] == "MemTotal:" {
+                    total = parts[1].parse().ok().map(|kb: u64| kb / 1024);
+                } else if parts[0] == "MemFree:" {
+                    free = parts[1].parse().ok().map(|kb: u64| kb / 1024);
+                } else if parts[0] == "MemAvailable:" {
+                    avail = parts[1].parse().ok().map(|kb: u64| kb / 1024);
+                }
+            }
+        }
+        if total.is_some() {
+            ram.total_mb = total;
+            // Use MemAvailable as free RAM if reported, else MemFree
+            ram.free_mb = avail.or(free);
+            if let (Some(t), Some(f)) = (total, ram.free_mb) {
+                ram.used_mb = Some(t.saturating_sub(f));
+            }
+        }
+    }
+    ram
+}
+
 /// Shared implementation for `health_report` and `report_all`. Takes
 /// `&AppState` so both callers avoid juggling Tauri's State lifetime.
 async fn health_report_for(state: &AppState, serial: &str) -> Result<HealthReport, String> {
@@ -318,35 +353,7 @@ async fn health_report_for(state: &AppState, serial: &str) -> Result<HealthRepor
     let procmem_text = &sections[6];
 
     let display = parse_display_mode(display_text);
-    let mut ram = parse_meminfo_summary(mem_text);
-
-    // Fast, local fallback for RAM info when the dumpsys meminfo section is
-    // missing or unparseable.
-    if ram.total_mb.is_none() || ram.free_mb.is_none() {
-        let mut total: Option<u64> = None;
-        let mut free: Option<u64> = None;
-        let mut avail: Option<u64> = None;
-        for line in procmem_text.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                if parts[0] == "MemTotal:" {
-                    total = parts[1].parse().ok().map(|kb: u64| kb / 1024);
-                } else if parts[0] == "MemFree:" {
-                    free = parts[1].parse().ok().map(|kb: u64| kb / 1024);
-                } else if parts[0] == "MemAvailable:" {
-                    avail = parts[1].parse().ok().map(|kb: u64| kb / 1024);
-                }
-            }
-        }
-        if total.is_some() {
-            ram.total_mb = total;
-            // Use MemAvailable as free RAM if reported, else MemFree
-            ram.free_mb = avail.or(free);
-            if let (Some(t), Some(f)) = (total, ram.free_mb) {
-                ram.used_mb = Some(t - f);
-            }
-        }
-    }
+    let ram = ram_info(mem_text, procmem_text);
 
     let storage = parse_storage_info(df_text);
     let thermal = parse_thermal_reading(thermal_text);

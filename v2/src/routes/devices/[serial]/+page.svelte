@@ -59,11 +59,12 @@
   import OptimizeTab from "$lib/components/OptimizeTab.svelte";
   import MediaTab from "$lib/components/MediaTab.svelte";
   import LogsTab from "$lib/components/LogsTab.svelte";
+  import TaskManagerTab from "$lib/components/TaskManagerTab.svelte";
   import ShellTab from "$lib/components/ShellTab.svelte";
 
   let serial = $derived(decodeURIComponent($page.params.serial ?? ""));
 
-  type Tab = "overview" | "health" | "media" | "launcher" | "apps" | "optimize" | "tweaks" | "remote" | "files" | "snapshot" | "sideload" | "shell" | "logs";
+  type Tab = "overview" | "health" | "tasks" | "media" | "launcher" | "apps" | "optimize" | "tweaks" | "remote" | "files" | "snapshot" | "sideload" | "shell" | "logs";
   let activeTab = $state<Tab>("overview");
 
   // macOS hides an idle scrollbar, so a tab strip that overflows a narrow
@@ -1931,6 +1932,14 @@
     refreshMeasurements();
   }
 
+  /// The Task Manager stopped something: what is running changed, so Health's
+  /// memory table and any measured app RAM are stale. Package state is not
+  /// touched by a stop, so the other tabs' caches stay valid.
+  function tasksStopped() {
+    healthStale = true;
+    refreshMeasurements();
+  }
+
   /// RAM, storage and last-used figures read before a change on the device
   /// no longer describe it, so a mutation re-reads them rather than leaving an
   /// open panel reporting a removed app's footprint as current.
@@ -2151,6 +2160,7 @@
     {#each [
       { id: "overview", label: "Overview", far: false },
       { id: "health", label: "Health", far: false },
+      { id: "tasks", label: "Task Manager", far: false },
       { id: "optimize", label: "Optimize", far: false },
       { id: "apps", label: "App List", far: false },
       { id: "launcher", label: "Launcher", far: false },
@@ -2529,6 +2539,8 @@
           The suggestion for an app is the same one the App List gives it —
           click a row to open it there. Names we cannot tie to an installed
           package are processes, not apps, and there is nothing to remove.
+          To stop apps running in the background, use the
+          <button class="link-button" onclick={() => (activeTab = "tasks")}>Task Manager</button>.
         </p>
         {#if report.top_memory.length === 0}
           <p class="muted">No process data.</p>
@@ -3568,6 +3580,17 @@
     <div hidden={activeTab !== "media"}>
       <MediaTab {serial} resetToken={mediaResetToken} active={activeTab === "media"} />
     </div>
+  {/if}
+  {#if activeTab === "tasks"}
+    {#key `${serial}:${pageEpoch}`}
+      <TaskManagerTab
+        {serial}
+        {hardwareId}
+        active={activeTab === "tasks"}
+        onstopped={tasksStopped}
+        onopenapp={openInAppList}
+      />
+    {/key}
   {/if}
   {#if activeTab === "logs"}
     {#key `${serial}:${pageEpoch}`}

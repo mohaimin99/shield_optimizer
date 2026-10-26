@@ -8,6 +8,7 @@ import { SHIELD, shieldScenario } from "../lib/worlds.mjs";
 const TABS = [
   "overview",
   "health",
+  "tasks",
   "optimize",
   "apps",
   "launcher",

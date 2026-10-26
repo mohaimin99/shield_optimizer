@@ -435,3 +435,50 @@ async fn disable_setup_helper_is_guarded_and_verified() {
     assert!(!not_helper.ok);
     assert!(enabled(&sim, PROJECTIVY_PKG));
 }
+
+#[tokio::test]
+async fn task_manager_stops_a_background_app_and_it_stays_gone() {
+    use crate::commands::tasks::{read_snapshot, stop_apps_impl, StopMode};
+    use crate::engine::KillOutcome;
+
+    let sim = shield_world();
+    let st = state(&sim);
+    let serial = "192.0.2.1:5555";
+    let before = read_snapshot(&st, serial).await.unwrap();
+    assert!(sim.world().gaps.is_empty(), "{:?}", sim.world().gaps);
+    let plex = before
+        .apps
+        .iter()
+        .find(|a| a.package == "com.plexapp.android")
+        .expect("Plex is running in the capture");
+    assert!(plex.verdict.is_allowed());
+
+    let report = stop_apps_impl(
+        &st,
+        serial,
+        vec!["com.plexapp.android".into(), "com.android.systemui".into()],
+        StopMode::Kill,
+        std::time::Duration::ZERO,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        report.results[0].outcome,
+        KillOutcome::Stopped { freed_mb } if freed_mb > 200.0
+    ));
+    assert!(matches!(
+        report.results[1].outcome,
+        KillOutcome::Refused { .. }
+    ));
+    let stopped = sim.world().devices.values().next().unwrap().stopped.clone();
+    assert_eq!(stopped, ["com.plexapp.android"]);
+    let after = report.snapshot.unwrap();
+    assert!(after
+        .apps
+        .iter()
+        .all(|a| a.package != "com.plexapp.android"));
+    assert!(after
+        .apps
+        .iter()
+        .any(|a| a.package == "com.android.systemui"));
+}

@@ -81,6 +81,20 @@ physical script in [`../docs/DEVICE-TEST-SCRIPT.md`](../docs/DEVICE-TEST-SCRIPT.
   stops on error, tab departure, device-page reset, document hiding or Stop. Tags cannot start
   with a hyphen or carry shell/filter syntax, and nothing clears buffers, resizes them or writes
   settings. Logs are never saved, uploaded or added to bug reports.
+- **Task Manager** (`crates/core/src/engine/tasks.rs`, `crates/core/src/commands/tasks.rs`,
+  desktop only; mobile does not register it). The importance of each process comes from the
+  `Total PSS by OOM adjustment` section of `dumpsys meminfo` (RSS when a build prints no PSS), so
+  "background" means what Android itself says, not a guess. Only `service`, `previous` and
+  `cached` count; Home and any heading the engine does not recognise never do. The gate's order is
+  protected list, caution list, launcher (HOME handlers, `launchers.json`, or a process in the
+  Home bucket, so Android 8 without `query-activities` is still covered), active IME, enabled
+  accessibility services, system app without a Safe catalog review, then in use. Stop is
+  `am kill`, which Android limits to the same buckets; force stop additionally requires every
+  process to be background. `stop_background_apps` ignores the list on screen: it reads the TV,
+  gates on that read, sends, waits ~1.2 s and reads again to classify each result (stopped,
+  restarted, kept, failed, unverified when the re-read fails). The simulator models a stop by
+  dropping the package's rows from later meminfo reads until `am start`. "Keep running" is a
+  per-hardware-id preference (`prefs.ts`) that only shapes Stop all.
 - **App logs**: `<data_dir>/logs/`, daily rotation, 7 kept. Debug level is per-crate, not
   global, so adb lines are not buried under hyper. `collect_diagnostics` formats in the engine
   (pure) and reads in `src-tauri/src/commands/diagnostics.rs`.
