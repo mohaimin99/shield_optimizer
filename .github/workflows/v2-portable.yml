@@ -1,0 +1,181 @@
+# Portable test builds of the v2 desktop app, for trying a change on real
+# hardware before it is released. This is not a release: builds are unsigned,
+# carry no updater artifacts (so no signing key is needed), and nothing is
+# pushed back to a branch or to the Homebrew tap. The real release path is
+# v2-release.yml on a `v2-*` tag; the two never share a tag namespace.
+#
+# Push a `portable-*` tag, or run it by hand, and it publishes a GitHub
+# pre-release with:
+#   Windows  zip: the .exe plus its resources folder. Needs WebView2, which
+#            Windows 10 and 11 already have. Nothing is installed.
+#   macOS    zip: the universal .app. Unsigned, so right-click > Open once.
+#   Linux    AppImage, with bundled libwayland stripped as v2-release.yml
+#            does (#60).
+name: v2 portable test build
+
+on:
+  push:
+    tags:
+      - 'portable-*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            args: '--no-bundle'
+          - os: macos-latest
+            label: macOS (universal)
+            args: '--target universal-apple-darwin --bundles app'
+          - os: ubuntu-22.04
+            label: Linux
+            args: '--bundles appimage'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/target
+          key: ${{ runner.os }}-cargo-v2-portable-${{ hashFiles('v2/Cargo.lock') }}
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        working-directory: v2
+        run: npm ci
+
+      # Updater artifacts need the release signing key, which a test build
+      # neither has nor wants.
+      - name: Build
+        working-directory: v2
+        shell: bash
+        run: npx tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      # Tauri resolves resources next to the executable on Windows, so the
+      # Remote tab's scrcpy server travels in a resources folder beside it.
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $pkg = "dist/ATV-Optimizer-portable"
+          New-Item -ItemType Directory -Force "$pkg/resources" | Out-Null
+          $exe = @("v2/target/release/shield-optimizer-v2.exe", "v2/target/release/ATV Optimizer.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { Get-ChildItem v2/target/release -Filter *.exe; throw "app executable not found" }
+          Copy-Item $exe "$pkg/ATV Optimizer.exe"
+          Copy-Item "v2/src-tauri/resources/scrcpy-server-v3.1" "$pkg/resources/"
+          Compress-Archive -Path "$pkg/*" -DestinationPath "dist/ATV-Optimizer-windows-x64-portable.zip"
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ditto -c -k --keepParent \
+            "v2/target/universal-apple-darwin/release/bundle/macos/ATV Optimizer.app" \
+            dist/ATV-Optimizer-macos-universal.zip
+
+      - name: Package (Linux, strip bundled libwayland #60)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(v2/target/release/bundle/appimage/*.AppImage)
+          [ ${#appimages[@]} -eq 1 ] || { echo "expected exactly one AppImage, found: ${appimages[*]}"; exit 1; }
+          appimage="${appimages[0]}"
+
+          curl -fsSL -o /tmp/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool" | sha256sum -c -
+          chmod +x /tmp/appimagetool
+
+          workdir=$(mktemp -d)
+          (cd "$workdir" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
+          stale=("$workdir"/squashfs-root/usr/lib/libwayland-*.so*)
+          if [ ${#stale[@]} -gt 0 ]; then
+            rm -v "${stale[@]}"
+            ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run \
+              "$workdir/squashfs-root" "$appimage"
+          fi
+          mkdir -p dist
+          cp "$appimage" dist/ATV-Optimizer-linux-x86_64.AppImage
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ runner.os }}
+          path: dist/ATV-Optimizer-*
+          if-no-files-found: error
+
+  publish:
+    name: Publish pre-release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('portable-run-{0}', github.run_number) }}
+        run: |
+          set -euo pipefail
+          short=$(echo "$GITHUB_SHA" | cut -c1-7)
+          cat > notes.md <<EOF
+          Portable **test** build of commit \`$short\`. Not an official release.
+
+          | Platform | File | How to run |
+          |---|---|---|
+          | Windows 10/11 (x64) | \`ATV-Optimizer-windows-x64-portable.zip\` | Unzip anywhere and run \`ATV Optimizer.exe\`. Keep the \`resources\` folder beside it. SmartScreen: More info > Run anyway. |
+          | macOS (Apple silicon + Intel) | \`ATV-Optimizer-macos-universal.zip\` | Unzip, then right-click the app > Open the first time (unsigned). |
+          | Linux (x86_64) | \`ATV-Optimizer-linux-x86_64.AppImage\` | \`chmod +x\` it and run. |
+
+          Builds are unsigned and have no updater artifacts. The in-app updater still checks the official upstream feed: if it offers an update while you are testing, decline it, or this build is replaced by the official one.
+          EOF
+          gh release create "$TAG" dist/ATV-Optimizer-* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Portable test build ($TAG)" \
+            --notes-file notes.md \
+            --prerelease
