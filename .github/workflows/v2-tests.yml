@@ -228,6 +228,11 @@ jobs:
         working-directory: v2
         run: npm run test:device-logs
 
+      # Blocked rows never offer Stop; a stop sends exactly what was chosen.
+      - name: Task Manager
+        working-directory: v2
+        run: npm run test:task-manager
+
       - name: TVRecommendations safety defaults
         working-directory: v2
         run: TVRECOMMENDATIONS_EVIDENCE=1 npm run test:tvrecommendations-safety

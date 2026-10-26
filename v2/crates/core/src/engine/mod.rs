@@ -14,6 +14,7 @@ pub mod media;
 pub mod optimize;
 pub mod safety;
 pub mod snapshot;
+pub mod tasks;
 pub mod types;
 
 pub use app_lists::{AppList, AppListBundle};
@@ -33,6 +34,10 @@ pub use safety::{
     shell_command_blocked, CatalogVerdict, Safety, SafetySource,
 };
 pub use snapshot::{Snapshot, SnapshotApplyPlan, SnapshotError, SCHEMA_VERSION};
+pub use tasks::{
+    force_stop_verdict, kill_outcome, plan_tasks, BlockReason, DeviceFacts, Importance,
+    KillOutcome, KillVerdict, RunningProcess, TaskApp, TaskPlan, TaskProcess,
+};
 pub use types::{
     ActionMethod, AppEntry, Device, DeviceProperties, DeviceStatus, OptimizeAction, OptimizeMode,
     OptimizePlanItem, RiskTier, SkipReason,

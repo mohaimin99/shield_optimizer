@@ -24,6 +24,15 @@ import type {
   SnapshotFile,
   StopAdbOnQuit,
   TweaksState,
+  BlockReason,
+  Importance,
+  KillOutcome,
+  KillVerdict,
+  StopMode,
+  StopReport,
+  TaskApp,
+  TaskProcess,
+  TaskSnapshot,
 } from "./types";
 
 const SERIAL = "192.168.1.42:5555";
@@ -514,6 +523,108 @@ function demoShellOutput(command: string): string {
   return "ok";
 }
 
+// Task Manager. Verdicts here are written by hand to match what the Rust
+// engine (engine/tasks.rs) decides for the same facts; the e2e harness runs
+// the real engine. Stateful like the simulator: a stopped app leaves the
+// list, and Twitch restarts its service once so Force stop can be shown.
+type DemoTaskSeed = [pkg: string, name: string, thirdParty: boolean, verdict: KillVerdict, processes: [string, number, number, Importance][]];
+const blockedBy = (reason: BlockReason, detail: string): KillVerdict => ({ kind: "blocked", reason, detail });
+const TASK_SEEDS: DemoTaskSeed[] = [
+  ["com.netflix.ninja", "Netflix", false, { kind: "allowed" }, [["com.netflix.ninja", 2201, 312, "cached"]]],
+  ["com.amazon.amazonvideo.livingroom", "Amazon Prime Video", true, { kind: "allowed" }, [["com.amazon.amazonvideo.livingroom", 2410, 268, "previous"]]],
+  ["com.google.android.youtube.tv", "YouTube", true, blockedBy("in_use", "On screen right now. Only background apps are stopped."), [["com.google.android.youtube.tv", 2533, 241, "foreground"]]],
+  ["com.plexapp.android", "Plex", true, { kind: "allowed" }, [["com.plexapp.android", 27976, 162, "service"], ["com.plexapp.android:sync", 27990, 36, "cached"]]],
+  ["com.google.android.tvlauncher", "Android TV Home", false, blockedBy("launcher", "A Home screen app. Android restarts the Home app as soon as it is stopped, so stopping it frees nothing and can blank the screen for a moment."), [["com.google.android.tvlauncher", 4012, 176, "home"]]],
+  ["com.nvidia.tegrazone3", "Nvidia Games (Tegra Zone)", false, blockedBy("system_app", "Part of the TV's system image, and not reviewed as safe to remove. System apps are left alone."), [["com.nvidia.tegrazone3", 4977, 154, "cached"]]],
+  ["com.google.android.gms", "Google Play services", false, blockedBy("protected", "Google Play Services — core Google framework. Stopping it is never offered."), [["com.google.android.gms", 32081, 142, "visible"]]],
+  ["com.disney.disneyplus", "Disney+", true, { kind: "allowed" }, [["com.disney.disneyplus", 5120, 131, "cached"]]],
+  ["com.spotify.tv.android", "Spotify", true, { kind: "allowed" }, [["com.spotify.tv.android", 5388, 96, "perceptible"], ["com.spotify.tv.android:cache", 5402, 22, "cached"]]],
+  ["tv.twitch.android.app", "Twitch", true, { kind: "allowed" }, [["tv.twitch.android.app", 5671, 104, "service"]]],
+  ["com.android.systemui", "System UI", false, blockedBy("protected", "System UI — the launcher's host process. Disabling makes the device unusable. Stopping it is never offered."), [["com.android.systemui", 3918, 96, "system"]]],
+  ["com.google.android.inputmethod.latin", "Gboard", false, blockedBy("protected", "Gboard — the system keyboard on most Android TV / Google TV. Stopping it is never offered."), [["com.google.android.inputmethod.latin", 28802, 33, "perceptible"]]],
+  ["com.android.vending", "Google Play Store", false, blockedBy("system_app", "Part of the TV's system image, and not reviewed as safe to remove. System apps are left alone."), [["com.android.vending:background", 2188, 24.6, "cached"]]],
+];
+const TASK_OTHER: TaskProcess[] = [
+  { process: "vendor.nvidia.hardware.graphics.composer@2.0-service", pid: 3405, mb: 245.7, importance: "system" },
+  { process: "system", pid: 3739, mb: 171.3, importance: "system" },
+  { process: "surfaceflinger", pid: 3443, mb: 77.5, importance: "system" },
+  { process: "zygote64", pid: 3369, mb: 27.3, importance: "system" },
+  { process: "media.codec", pid: 3571, mb: 13.2, importance: "system" },
+];
+const BACKGROUND: Importance[] = ["service", "previous", "cached"];
+const demoTasks = {
+  stopped: new Set<string>(),
+  restarted: new Set<string>(),
+  /// Stopped while part of it was in use: only the in-use part is left.
+  trimmed: new Set<string>(),
+};
+
+function demoTaskApps(): TaskApp[] {
+  return TASK_SEEDS.filter(([pkg]) => !demoTasks.stopped.has(pkg)).map(([pkg, name, thirdParty, verdict, procs]) => {
+    const live = demoTasks.restarted.has(pkg)
+      ? [[pkg, 6120, 38, "service"] as const]
+      : procs.filter((p) => !demoTasks.trimmed.has(pkg) || !BACKGROUND.includes(p[3]));
+    const processes: TaskProcess[] = live.map(([process, pid, mb, importance]) => ({ process, pid, mb, importance }));
+    const total = processes.reduce((sum, p) => sum + p.mb, 0);
+    const background = processes.filter((p) => BACKGROUND.includes(p.importance)).reduce((sum, p) => sum + p.mb, 0);
+    return {
+      package: pkg,
+      name,
+      processes,
+      total_mb: Math.round(total * 10) / 10,
+      background_mb: Math.round(background * 10) / 10,
+      importance: processes[0].importance,
+      third_party: thirdParty,
+      verdict:
+        verdict.kind === "allowed" && background === 0
+          ? blockedBy("in_use", "Doing something you would notice, such as playing audio or running a foreground service. Only background apps are stopped.")
+          : verdict,
+    };
+  });
+}
+
+function demoTaskSnapshot(): TaskSnapshot {
+  const freed = TASK_SEEDS.filter(([pkg]) => demoTasks.stopped.has(pkg) || demoTasks.trimmed.has(pkg)).reduce(
+    (sum, [, , , , procs]) => sum + procs.filter((p) => BACKGROUND.includes(p[3])).reduce((s, p) => s + p[2], 0),
+    0,
+  );
+  const used = Math.round(health.ram.used_mb! - freed);
+  return {
+    metric: "pss",
+    ram: { ...health.ram, used_mb: used, free_mb: health.ram.total_mb! - used },
+    apps: demoTaskApps(),
+    other: TASK_OTHER,
+    home_handlers_read: true,
+  };
+}
+
+function demoStop(packages: string[], mode: StopMode): StopReport {
+  const before = demoTaskSnapshot();
+  const results = packages.map((pkg) => {
+    const app = before.apps.find((a) => a.package === pkg);
+    if (!app) return { package: pkg, outcome: { kind: "not_running" } as KillOutcome };
+    if (app.verdict.kind === "blocked") {
+      return { package: pkg, outcome: { kind: "refused", reason: app.verdict.reason, detail: app.verdict.detail } as KillOutcome };
+    }
+    const inUse = app.processes.some((p) => !BACKGROUND.includes(p.importance));
+    if (mode === "force_stop" && inUse) {
+      return { package: pkg, outcome: { kind: "refused", reason: "in_use", detail: "Part of it is in use right now, and force stop would end that too." } as KillOutcome };
+    }
+    if (pkg === "tv.twitch.android.app" && mode === "kill" && !demoTasks.restarted.has(pkg)) {
+      demoTasks.restarted.add(pkg);
+      return { package: pkg, outcome: { kind: "restarted", freed_mb: app.background_mb, now_mb: 38 } as KillOutcome };
+    }
+    demoTasks.restarted.delete(pkg);
+    if (inUse) {
+      demoTasks.trimmed.add(pkg);
+      return { package: pkg, outcome: { kind: "stopped", freed_mb: app.background_mb } as KillOutcome };
+    }
+    demoTasks.stopped.add(pkg);
+    return { package: pkg, outcome: { kind: "stopped", freed_mb: app.background_mb } as KillOutcome };
+  });
+  return { results, ram_before: before.ram, snapshot: demoTaskSnapshot(), snapshot_error: null };
+}
+
 // Map of command name → handler. Unlisted commands fall through to a benign
 // success so a stray click during capture never throws. Exported so the mobile
 // app's demo layer answers the commands both apps share from the same fixtures.
@@ -575,6 +686,10 @@ export function handle(cmd: string, args: Record<string, unknown>): unknown {
       return null;
     case "health_report":
       return health;
+    case "task_snapshot":
+      return demoTaskSnapshot();
+    case "stop_background_apps":
+      return demoStop(args.packages as string[], args.mode as StopMode);
     case "app_list_for_device":
       return apps;
     case "package_states":

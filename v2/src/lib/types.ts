@@ -222,6 +222,81 @@ export interface RamInfo {
   swap_mb: number | null;
 }
 
+/// How much Android is using a process, from its OOM-adjustment bucket.
+export type Importance =
+  | "system"
+  | "foreground"
+  | "visible"
+  | "perceptible"
+  | "busy"
+  | "home"
+  | "service"
+  | "previous"
+  | "cached"
+  | "unknown";
+
+/// Why the Task Manager will not stop an app. Decided in the Rust engine.
+export type BlockReason =
+  | "protected"
+  | "sensitive"
+  | "launcher"
+  | "keyboard"
+  | "accessibility"
+  | "system_app"
+  | "in_use"
+  | "unknown_state";
+
+export type KillVerdict =
+  | { kind: "allowed" }
+  | { kind: "blocked"; reason: BlockReason; detail: string };
+
+export interface TaskProcess {
+  process: string;
+  pid: number | null;
+  mb: number;
+  importance: Importance;
+}
+
+export interface TaskApp {
+  package: string;
+  name: string | null;
+  processes: TaskProcess[];
+  total_mb: number;
+  /// Memory held by its background processes: roughly what Stop returns.
+  background_mb: number;
+  importance: Importance;
+  third_party: boolean;
+  verdict: KillVerdict;
+}
+
+export interface TaskSnapshot {
+  metric: "pss" | "rss";
+  ram: RamInfo;
+  apps: TaskApp[];
+  /// Processes not tied to an installed package. Never stoppable.
+  other: TaskProcess[];
+  home_handlers_read: boolean;
+}
+
+export type StopMode = "kill" | "force_stop";
+
+export type KillOutcome =
+  | { kind: "stopped"; freed_mb: number }
+  | { kind: "restarted"; freed_mb: number; now_mb: number }
+  | { kind: "kept"; freed_mb: number }
+  | { kind: "refused"; reason: BlockReason; detail: string }
+  | { kind: "not_running" }
+  | { kind: "failed"; message: string }
+  | { kind: "unverified" };
+
+export interface StopReport {
+  results: { package: string; outcome: KillOutcome }[];
+  ram_before: RamInfo;
+  /// The read taken after the stop, or null when it failed.
+  snapshot: TaskSnapshot | null;
+  snapshot_error: string | null;
+}
+
 export interface StorageInfo {
   total: string | null;
   used: string | null;

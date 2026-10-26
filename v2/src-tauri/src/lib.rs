@@ -22,7 +22,7 @@ use commands::{app_report, backup, diagnostics, files, install, scan, sideload, 
 use shield_optimizer_core::adb::{AdbDriver, AdbError, AdbOutput, AdbResult};
 use shield_optimizer_core::commands::{
     apps, devices, health, input, launcher, loader, logcat, optimize, reboot, recovery, screenshot,
-    shell, snapshot, tuning,
+    shell, snapshot, tasks, tuning,
 };
 use shield_optimizer_core::license::Entitlement;
 use tauri::Manager;
@@ -151,6 +151,8 @@ pub fn invoke_handler<R: tauri::Runtime>(
         reboot::reboot_device,
         shell::run_shell,
         logcat::read_device_logs,
+        tasks::task_snapshot,
+        tasks::stop_background_apps,
         tuning::get_tweaks,
         tuning::write_setting,
         tuning::set_display_scaling,

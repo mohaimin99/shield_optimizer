@@ -129,10 +129,10 @@ const KEEP_KEY = "shieldopt.keptPackages";
 /// Plex" is not something the TV ever knew.
 type KeepMap = Record<string, string[]>;
 
-function readKeepMap(): KeepMap {
+function readKeepMap(key = KEEP_KEY): KeepMap {
   if (typeof localStorage === "undefined") return {};
   try {
-    const raw = localStorage.getItem(KEEP_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
@@ -152,10 +152,36 @@ export function idKey(hardwareId: string | null | undefined): string | null {
   return id && id.toLowerCase() !== "unknown" ? id : null;
 }
 
-export function getKeptPackages(raw: string | null | undefined): Set<string> {
+function getPackageSet(key: string, raw: string | null | undefined): Set<string> {
   const hardwareId = idKey(raw);
   if (!hardwareId) return new Set();
-  return new Set(readKeepMap()[hardwareId] ?? []);
+  return new Set(readKeepMap(key)[hardwareId] ?? []);
+}
+
+function setPackageInSet(
+  key: string,
+  raw: string | null | undefined,
+  pkg: string,
+  member: boolean,
+): Set<string> {
+  const hardwareId = idKey(raw);
+  const current = getPackageSet(key, hardwareId);
+  if (!hardwareId) return current;
+  if (member) current.add(pkg);
+  else current.delete(pkg);
+  const map = readKeepMap(key);
+  if (current.size === 0) delete map[hardwareId];
+  else map[hardwareId] = [...current].sort();
+  try {
+    localStorage.setItem(key, JSON.stringify(map));
+  } catch {
+    /* storage unavailable — the decision just will not survive a restart */
+  }
+  return current;
+}
+
+export function getKeptPackages(raw: string | null | undefined): Set<string> {
+  return getPackageSet(KEEP_KEY, raw);
 }
 
 export function setPackageKept(
@@ -163,20 +189,25 @@ export function setPackageKept(
   pkg: string,
   kept: boolean,
 ): Set<string> {
-  const hardwareId = idKey(raw);
-  const current = getKeptPackages(hardwareId);
-  if (!hardwareId) return current;
-  if (kept) current.add(pkg);
-  else current.delete(pkg);
-  const map = readKeepMap();
-  if (current.size === 0) delete map[hardwareId];
-  else map[hardwareId] = [...current].sort();
-  try {
-    localStorage.setItem(KEEP_KEY, JSON.stringify(map));
-  } catch {
-    /* storage unavailable — the decision just will not survive a restart */
-  }
-  return current;
+  return setPackageInSet(KEEP_KEY, raw, pkg, kept);
+}
+
+const KEEP_RUNNING_KEY = "shieldopt.taskManagerKeepRunning";
+
+/// Apps the Task Manager's "Stop all" leaves alone on this TV — a music app
+/// you leave playing, a server you want answering. Same identity rule as the
+/// keep list above: per hardware id, and nothing at all for a TV without one.
+/// Stopping one by hand still works; this only shapes the bulk action.
+export function getKeepRunning(raw: string | null | undefined): Set<string> {
+  return getPackageSet(KEEP_RUNNING_KEY, raw);
+}
+
+export function setKeepRunning(
+  raw: string | null | undefined,
+  pkg: string,
+  keep: boolean,
+): Set<string> {
+  return setPackageInSet(KEEP_RUNNING_KEY, raw, pkg, keep);
 }
 
 const SHELL_ACK_KEY = "shieldOptimizer.expertShellAcknowledged";

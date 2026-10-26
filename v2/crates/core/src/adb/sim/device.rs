@@ -140,6 +140,11 @@ pub struct Device {
     pub input_log: Vec<String>,
     /// Last `am start` intents.
     pub started: Vec<String>,
+    /// Packages stopped with `am kill` / `am force-stop` and not started
+    /// since. Their processes drop out of `dumpsys meminfo`. Real `am kill`
+    /// spares in-use processes; the Task Manager never sends it for those.
+    #[serde(default)]
+    pub stopped: Vec<String>,
     pub uptime_base: f64,
 }
 
@@ -169,6 +174,7 @@ impl Device {
             reattach_after_polls: None,
             input_log: Vec::new(),
             started: Vec::new(),
+            stopped: Vec::new(),
             uptime_base: 86_400.0,
         }
     }
@@ -671,14 +677,16 @@ impl Device {
         }))
     }
 
-    /// A disabled or uninstalled app has no process; drop its rows from the
-    /// captured memory report so the Health tab sees what a real device would.
+    /// A disabled, uninstalled or stopped app has no process; drop its rows
+    /// from the captured memory report so Health and the Task Manager see
+    /// what a real device would.
     fn without_stopped_processes(&self, text: &str) -> String {
         let stopped: Vec<&str> = self
             .packages
             .iter()
             .filter(|(_, p)| !p.enabled || !p.installed)
             .map(|(n, _)| n.as_str())
+            .chain(self.stopped.iter().map(String::as_str))
             .collect();
         text.lines()
             .filter(|line| {
@@ -848,6 +856,8 @@ impl Device {
         Some(match sub {
             "start" => {
                 let intent = args[1..].join(" ");
+                self.stopped
+                    .retain(|pkg| !intent.contains(&format!("{pkg}/")) && !args.contains(pkg));
                 self.started.push(intent.clone());
                 let wait = args.iter().any(|a| a == "-W");
                 let mut out = format!("Starting: Intent {{ {intent} }}\n");
@@ -858,7 +868,15 @@ impl Device {
                 }
                 Out::ok(out)
             }
-            "force-stop" | "kill" | "kill-all" => Out::ok(""),
+            "force-stop" | "kill" => {
+                if let Some(pkg) = args[1..].iter().rfind(|a| !a.starts_with('-')) {
+                    if !self.stopped.contains(pkg) {
+                        self.stopped.push(pkg.clone());
+                    }
+                }
+                Out::ok("")
+            }
+            "kill-all" => Out::ok(""),
             _ => return None,
         })
     }

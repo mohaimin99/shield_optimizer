@@ -86,6 +86,12 @@ async function captureScreens(page, shot) {
     await page.getByText("3840x2160", { exact: false }).first().waitFor();
     await shot("health");
 
+    // Task Manager: running apps with their state, and the reason for every
+    // app that is not offered.
+    await page.locator("#tab-tasks").click();
+    await page.locator("#tabpanel-tasks table.task-table tbody tr").first().waitFor();
+    await shot("task-manager");
+
     // 5. Playback capabilities.
     await page.locator("#tab-media").click();
     await page.getByText("Video codecs", { exact: true }).waitFor();
